@@ -5,30 +5,36 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.rorkien.bucketscraper.domain.Bucket;
 import com.rorkien.bucketscraper.domain.BucketContent;
 
 public class ThreadWorker extends Thread {
 	private Integer filesDownloaded = 0;
-	private Long bytesDownloaded = 0L;	
+	private Long bytesDownloaded = 0L;
+	
+	private Integer offsetStart;
+	private Integer offsetEnd;
 	
 	private Bucket bucket;
 	private File outputFolder;
 
-	private List<BucketContent> contents;
+	private ConcurrentLinkedQueue<BucketContent> contents;
 	private WorkerStatistics workerStatistics;
 	
-	public ThreadWorker(ThreadGroup group, WorkerStatistics workerStatistics, Bucket bucket, File outputFolder, List<BucketContent> contents) {
+	public ThreadWorker(ThreadGroup group, WorkerStatistics workerStatistics, Bucket bucket, Integer offsetStart, Integer offsetEnd, File outputFolder, ConcurrentLinkedQueue<BucketContent> contents) {
 		super(group, "Worker");
-		this.contents = contents;
 		this.workerStatistics = workerStatistics;
 		this.bucket = bucket;
+		this.offsetStart = offsetStart;
+		this.offsetEnd = offsetEnd;
 		this.outputFolder = outputFolder;
+		this.contents = contents;
 	}
 
 	public void run() {
@@ -36,49 +42,58 @@ public class ThreadWorker extends Thread {
 		
 		try {
 			Thread.sleep(500);
-		} catch (InterruptedException e) {
-		}
+		} catch (InterruptedException e) { }
 		
-		for (int i = 0; i < contents.size(); i++) {
+		BucketContent content = null;
+		while ((content = contents.poll()) != null) {
 			URL url = null;
 			
 			try {
-				url = new URL(bucket.getBaseUrl() + URLEncoder.encode(contents.get(i).getKey(), "UTF-8"));
-				String fileName = contents.get(i).getKey().substring(contents.get(i).getKey().lastIndexOf('/') + 1, contents.get(i).getKey().length());
+				url = new URL(bucket.getBaseUrl() + URLEncoder.encode(content.getKey(), "UTF-8"));
+				String fileName = content.getKey().substring(content.getKey().lastIndexOf('/') + 1, content.getKey().length());
 				
 				filesDownloaded++;
 				int totalFilesDownloaded = workerStatistics.getTotalFilesDownloaded().incrementAndGet();
 				long totalBytesDownloaded = workerStatistics.getTotalBytesDownloaded().get() / 1024 / 1024;
 				
 				if (fileName.equals("")) {
-					System.out.printf("[%s][%d/%d, %d/%dMB] Downloading file %d out of %d : Unnamed file. Ignoring.\n",
+					System.out.printf("[%s][%d/%d (%d), %d/%dMB] Downloading file %d out of %d: Unnamed file. Ignoring.\n",
 							getName(),
-							filesDownloaded,
+							totalFilesDownloaded,
 							contents.size(),
+							filesDownloaded,
 							bytesDownloaded / 1024 / 1024,
 							totalBytesDownloaded,
-							totalFilesDownloaded,
-							bucket.getContents().size());
+							offsetStart + totalFilesDownloaded,
+							offsetEnd);
 					continue;
 				} else {
-					System.out.printf("[%s][%d/%d, %d/%dMB] Downloading file %d out of %d (%s, %dMB)\n",
+					System.out.printf("[%s][%d/%d (%d), %d/%dMB] Downloading file %d out of %d (%s, %dMB)\n",
 							getName(),
-							filesDownloaded,
+							totalFilesDownloaded,
 							contents.size(),
+							filesDownloaded,
 							bytesDownloaded / 1024 / 1024,
 							totalBytesDownloaded,
-							totalFilesDownloaded,
-							bucket.getContents().size(),
-							contents.get(i).getKey(),
-							contents.get(i).getSize() / 1024 / 1024);
+							offsetStart + totalFilesDownloaded,
+							offsetEnd,
+							content.getKey(),
+							content.getSize() / 1024 / 1024);
 				}
 				
+				String sanitizedFileName = fileName.replaceAll("[\\/:*?\"<>|]", "");
+				Path targetPath = new File(outputFolder + File.separator + sanitizedFileName).toPath();
+				Path temporaryFilePath = new File(outputFolder + File.separator + String.format(".bs-%s.tmp", sanitizedFileName, System.currentTimeMillis())).toPath();
 				
-				Path targetPath = new File(outputFolder + File.separator + fileName.replaceAll("[\\/:*?\"<>|]", "")).toPath();
-				Files.copy(url.openStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+				Files.copy(url.openStream(), temporaryFilePath, StandardCopyOption.REPLACE_EXISTING);
+				try {
+					Files.move(temporaryFilePath, targetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);					
+				} catch (AtomicMoveNotSupportedException e) {
+					Files.move(temporaryFilePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+				}
 
-				bytesDownloaded += contents.get(i).getSize();
-				workerStatistics.getTotalBytesDownloaded().addAndGet(contents.get(i).getSize());
+				bytesDownloaded += content.getSize();
+				workerStatistics.getTotalBytesDownloaded().addAndGet(content.getSize());
 				
 			} catch (MalformedURLException e) {
 				System.err.println("Bad URL: " + url);

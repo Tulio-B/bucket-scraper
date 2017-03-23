@@ -6,6 +6,7 @@ import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import javax.xml.bind.JAXBException;
 
@@ -112,16 +113,10 @@ public class Worker {
 		
 		if (offsetEnd == null) offsetEnd = bucket.getContents().size();
 		List<BucketContent> workingList = bucket.getContents().subList(offsetStart, offsetEnd);
-		
-		int sublistSize = (int) Math.ceil((workingList.size() * 1D) / workerAmount);
-		int startIndex = 0;
+		ConcurrentLinkedQueue<BucketContent> contentQueue = new ConcurrentLinkedQueue<BucketContent>(workingList);
 		
 		for (int i = 0; i < workerAmount; i++) {
-			int endIndex = Math.min(startIndex + sublistSize, workingList.size());
-			List<BucketContent> workerList = workingList.subList(startIndex, endIndex);		
-			startIndex = endIndex;
-			
-			ThreadWorker worker = new ThreadWorker(workerGroup, workerStatistics, bucket, outputFolder, workerList);
+			ThreadWorker worker = new ThreadWorker(workerGroup, workerStatistics, bucket, offsetStart, offsetEnd, outputFolder, contentQueue);
 			worker.setName("Worker #" + (i + 1));
 			worker.start();
 		}

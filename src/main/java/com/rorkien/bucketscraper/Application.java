@@ -59,6 +59,9 @@ public class Application {
 				}
 			}
 			
+			if (offsetEnd != null) {
+				System.out.printf("Offsetting download from %d to %d.\n", offsetStart, offsetEnd);
+			}
 			if (outputFolder == null) {
 				System.out.println("Trying to create output folder.");
 				
